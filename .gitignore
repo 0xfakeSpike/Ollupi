@@ -1,0 +1,57 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+/ollupi
+/voice-chat
+/voice-smoke
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# config files with sensitive information
+workspace/*.json
+!workspace/*.example.json
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+.DS_Store
+.gocache/
+.tmp_gocache/
+
+# Local workspace DB and logs (never commit)
+workspace/data/*.sqlite
+workspace/data/*.sqlite-shm
+workspace/data/*.sqlite-wal
+workspace/logs/
+workspace/AGENTS.md
+
+# Generated desktop build artifacts
+desktop/build/bin/
+desktop/frontend/package.json.md5
+
+# Local-only design notes (kept out of the repository)
+docs/outbound-call-integration.md

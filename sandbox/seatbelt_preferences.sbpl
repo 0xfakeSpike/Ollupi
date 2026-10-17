@@ -1,0 +1,11 @@
+; Derived from OpenAI Codex codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl
+; (https://github.com/openai/codex), Copyright OpenAI, licensed under Apache-2.0.
+
+; Preferences IPC can expose data outside the filesystem read roots.
+; Include this policy only when filesystem reads are unrestricted.
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow mach-lookup
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)

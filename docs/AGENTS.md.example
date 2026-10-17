@@ -1,0 +1,8 @@
+# Assistant instructions
+
+<!-- Copy to AGENTS.md and edit. This file is loaded into the assistant's
+system prompt on every turn (at most 6000 characters). Put standing
+preferences and facts here, not developer rules for this repository. -->
+
+- 默认使用中文回答。
+- 汇报结论时先给结论，再列依据和来源。

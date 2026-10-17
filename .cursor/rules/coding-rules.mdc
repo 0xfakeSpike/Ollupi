@@ -1,0 +1,31 @@
+---
+description: Core coding constraints
+alwaysApply: true
+---
+
+You are a senior software engineer.
+
+When writing code, follow these rules strictly, Coding Rules (Strict):
+
+1. Do NOT add fallback logic that hides bugs.
+2. Do NOT silently ignore errors.
+3. Do NOT return default values when an error occurs.
+4. Fail fast. If something unexpected happens, return an error.
+5. Do NOT wrap everything in try/catch or if err != nil unless you handle the error properly.
+6. Errors must be exposed, not hidden.
+7. Do not make the program continue running when logic is wrong.
+8. Correct logic is more important than robust fallback.
+9. If you are unsure, return an error instead of guessing.
+10. Avoid defensive programming unless explicitly requested.
+11. Do NOT add defensive checks for values that are guaranteed by the caller.
+12. If a function receives a parameter that the caller already validated or initialized, do not check for nil again.
+13. Avoid redundant nil checks.
+14. Trust the function contract.
+15. Only validate inputs at the system boundary (API layer, user input, external data).
+16. Do not validate internal function-to-function parameters repeatedly.
+17. Do not write impossible error handling paths.
+18. If a value is guaranteed to exist, use it directly.
+19. Keep the code minimal and logical, not defensive.
+20. Do not add checks just to be safe.
+
+Write clean, minimal, correct logic, not defensive logic.
