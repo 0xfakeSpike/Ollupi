@@ -2,7 +2,7 @@
 
 Ollupi 是一个 Go 写的 agent 运行时库：ReAct 循环、会话与调度、工具注册、权限与审批、沙箱、脱敏、记忆和网关协议。它负责把模型、工具、记忆、权限和沙箱组织成一条可以完整回放的执行链路。任何人都可以 import 它，接上自己的工具、技能和界面，做出自己的 agent 软件。
 
-[shenshiagent](https://github.com/0xfakeSpike/shenshiagent) 是用 Ollupi 构建的参考应用：macOS 桌面端、Shell / MCP / OpenCLI / Skills 工具、语音外呼调查等都在那里。
+[haoagent](https://github.com/0xfakeSpike/haoagent) 是用 Ollupi 构建的参考应用：macOS 桌面端、Shell / MCP / OpenCLI / Skills 工具、语音外呼调查等都在那里。
 
 ## 核心机制
 
@@ -55,7 +55,7 @@ Ollupi 是 Go 库，不是可执行程序：
 go get github.com/0xfakeSpike/ollupi
 ```
 
-应用自己负责装配：读配置、创建存储、注册工具、构建 Runner 和 Manager，再按需要挂上网关和界面。shenshiagent 的 `appserver/wire.go` 是一份完整的装配示例，可以照着改。
+应用自己负责装配：读配置、创建存储、注册工具、构建 Runner 和 Manager，再按需要挂上网关和界面。haoagent 的 `appserver/wire.go` 是一份完整的装配示例，可以照着改。
 
 ## 包结构
 

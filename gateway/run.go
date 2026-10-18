@@ -16,10 +16,13 @@ import (
 
 // Options configures the gateway.
 type Options struct {
+	// Cron and RunCronJob are optional; without them the cron methods
+	// answer that scheduled jobs are unavailable.
 	Cron       Cron
 	RunCronJob CronRunner
 	Config     Config
-	Memory     memory.AdminStore
+	// Memory is optional, likewise.
+	Memory memory.AdminStore
 	// Token, when set, must be presented by every client as the "token"
 	// query parameter or an "Authorization: Bearer" header.
 	Token string

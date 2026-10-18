@@ -93,7 +93,7 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 
 | # | 能力 | 说明 | Codex | Claude Code | Ollupi | Ollupi 现状与位置 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 4.1.1 | 执行命令 | 运行任意程序 | 有 | 有：Bash | 有 | `run_command`（shenshiagent `tools/shell`） |
+| 4.1.1 | 执行命令 | 运行任意程序 | 有 | 有：Bash | 有 | `run_command`（haoagent `tools/shell`） |
 | 4.1.2 | 后台进程 | 长时间运行的命令，之后再读取输出 | 部分 | 有：后台 Bash、读取后台输出 | 无 | 命令有超时，必须同步结束 |
 | 4.1.3 | 读文件 | 专用读文件工具，支持分页 | 无：通过命令行 | 有：Read | 无 | 只能用 `run_command` |
 | 4.1.4 | 写文件、编辑文件 | 专用写入、精确替换、补丁 | 有：`apply_patch` | 有：Write、Edit、MultiEdit | 无 | |
@@ -102,7 +102,7 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 | 4.1.7 | 抓取网页 | 取网页内容 | ? | 有：WebFetch | 有 | OpenCLI `web read`：真实浏览器渲染（含 JS 页面），正文转 Markdown 直接返回，不落盘 |
 | 4.1.8 | 查看图片 | 让模型看本地图片 | 有：`view_image` | 有：Read 支持图片 | 无 | |
 | 4.1.9 | Notebook 编辑 | Jupyter 单元格编辑 | 无 | 有：NotebookEdit | 无 | |
-| 4.1.10 | 网站自动化 | 浏览器或站点命令行操作网站 | 无 | 部分：通过 MCP | 有 | OpenCLI 工具集，按允许列表从命令帮助生成 schema（shenshiagent `tools/opencli`） |
+| 4.1.10 | 网站自动化 | 浏览器或站点命令行操作网站 | 无 | 部分：通过 MCP | 有 | OpenCLI 工具集，按允许列表从命令帮助生成 schema（haoagent `tools/opencli`） |
 | 4.1.11 | 定时任务工具 | 让 agent 自己创建、删除、列出定时任务 | 无 | 无 | 有 | `create_scheduled_job` 等（`cron`） |
 | 4.1.12 | 工具自省 | 列出可用的工具提供方和工具 | 无 | 无 | 有 | `list_tool_providers`、`list_tools_for_provider` |
 
@@ -120,7 +120,7 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 
 | # | 能力 | 说明 | Codex | Claude Code | Ollupi | Ollupi 现状与位置 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 4.3.1 | MCP 客户端：工具 | 调用 MCP 服务器的工具 | 有 | 有 | 有 | shenshiagent `tools/mcp` |
+| 4.3.1 | MCP 客户端：工具 | 调用 MCP 服务器的工具 | 有 | 有 | 有 | haoagent `tools/mcp` |
 | 4.3.2 | MCP 传输：本地进程（stdio） | 启动本地 MCP 进程 | 有 | 有 | 无 | |
 | 4.3.3 | MCP 传输：HTTP | Streamable HTTP、SSE | 有 | 有 | 部分 | 只支持 Streamable HTTP |
 | 4.3.4 | MCP 认证 | OAuth 等 | 部分 | 有 | 无 | |
@@ -160,9 +160,9 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 | 7.2 | 按会话覆盖审批策略 | 单个会话用不同策略 | 有 | 有 | 有 | thread 的 `approvalPolicy` |
 | 7.3 | 允许、拒绝规则 | 按工具和参数模式配置 | 部分：命令执行规则 | 有：`Bash(git:*)` 等 | 有 | `agent.permissions` 的 allow、ask、deny，语法同 Claude Code：`工具名` 或 `run_command(git diff *)`；按 deny、ask、allow 顺序第一个匹配生效，deny 单写工具名时不提供该工具；规则写错启动即报错（`agent/permissions.go`） |
 | 7.4 | "本次会话一直允许" | 批准一次，后续同类不再询问 | 有 | 有：不再询问 | 有 | Codex 的 `acceptForSession`：同一 thread 里相同命令（其他工具为同一工具）不再询问，记在审批 item 上，重启后仍有效；ask 规则拦下的调用不提供此选项 |
-| 7.5 | 系统级沙箱 | 隔离文件系统和网络 | 有：Seatbelt、Landlock、seccomp | 部分：可选沙箱 | 部分 | 只有 macOS Seatbelt 一套：按策略生成默认拒绝的 profile，基础规则取自 Codex；工作目录内拒读凭据、git 元数据只读、开网时关闭本机 Unix socket；非 macOS 上沙箱模式启动即报错，只能显式选 `full-access`（`sandbox`、shenshiagent `tools/shell`）。OpenCLI 按设计在沙箱外运行，但同样经过 `sandbox.RunHost`：整组进程超时即杀、输出有上限、只拿到基础环境变量和自己的 `OPENCLI_*` 设置 |
+| 7.5 | 系统级沙箱 | 隔离文件系统和网络 | 有：Seatbelt、Landlock、seccomp | 部分：可选沙箱 | 部分 | 只有 macOS Seatbelt 一套：按策略生成默认拒绝的 profile，基础规则取自 Codex；工作目录内拒读凭据、git 元数据只读、开网时关闭本机 Unix socket；非 macOS 上沙箱模式启动即报错，只能显式选 `full-access`（`sandbox`、haoagent `tools/shell`）。OpenCLI 按设计在沙箱外运行，但同样经过 `sandbox.RunHost`：整组进程超时即杀、输出有上限、只拿到基础环境变量和自己的 `OPENCLI_*` 设置 |
 | 7.6 | 沙箱分级 | 只读、可写工作区、完全放开 | 有 | 部分 | 有 | `exec.sandbox_mode`：`read-only` / `workspace-write`（默认）/ `full-access`（不使用沙箱） |
-| 7.7 | 沙箱与审批联动 | 沙箱内放行，越界才申请 | 有：on-request 升级 | 部分 | 有 | on-request 下沙箱内命令免审批；`run_command` 带 `sandbox_permissions: "require_escalated"` 和 `justification` 申请在沙箱外执行，需审批；`never` 拒绝升级（`agent/approval.go`、shenshiagent `tools/shell`） |
+| 7.7 | 沙箱与审批联动 | 沙箱内放行，越界才申请 | 有：on-request 升级 | 部分 | 有 | on-request 下沙箱内命令免审批；`run_command` 带 `sandbox_permissions: "require_escalated"` 和 `justification` 申请在沙箱外执行，需审批；`never` 拒绝升级（`agent/approval.go`、haoagent `tools/shell`） |
 | 7.8 | 网络访问控制 | 默认断网、按需开放 | 有 | 部分 | 有 | `exec.network` 开关（关闭时连 localhost 一并禁止），默认断网；`exec.allowed_domains` 按域名放行（每条命令一个本地 HTTP/SOCKS5 代理，Seatbelt 只放行代理端口，参照 sandbox-runtime 与 Codex）；开网时仍关闭本机 Unix socket（Docker、ssh-agent），只放行 `exec.unix_sockets` |
 | 7.9 | 工作目录限制 | 命令只能在指定目录运行 | 有 | 有 | 有 | `exec.workspace_dirs` |
 | 7.10 | 危险命令拦截 | 黑名单、已知安全命令 | 有：安全命令白名单 | 有：规则 | 部分 | `command_blacklist` 和 deny 规则；没有内置的已知安全命令清单 |
@@ -224,7 +224,7 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 
 | # | 能力 | 说明 | Codex | Claude Code | Ollupi | Ollupi 现状与位置 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 12.1 | 技能（Agent Skills） | 按需加载的 `SKILL.md` 和资源 | ? | 有 | 有 | 目录、激活、读取资源（shenshiagent `tools/skills`） |
+| 12.1 | 技能（Agent Skills） | 按需加载的 `SKILL.md` 和资源 | ? | 有 | 有 | 目录、激活、读取资源（haoagent `tools/skills`） |
 | 12.2 | 技能声明可用工具 | `allowed-tools` | ? | 有：强制执行 | 部分 | 只展示给模型看，不强制 |
 | 12.3 | 自定义斜杠命令、提示词模板 | 可复用的提示词 | 有：custom prompts | 有：`.claude/commands` | 无 | |
 | 12.4 | 插件 | 打包分发命令、agent、hooks、MCP | 无 | 有：插件市场 | 无 | |

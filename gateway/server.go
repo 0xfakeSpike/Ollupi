@@ -209,6 +209,13 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 	}
 	threads := c.s.threads
 	switch method {
+	case methodCronList, methodCronAdd, methodCronRemove, methodCronRun:
+		// An app without scheduled jobs serves no scheduler.
+		if c.s.cron == nil || (method == methodCronRun && c.s.runJob == nil) {
+			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeServerError, "scheduled jobs are unavailable")
+		}
+	}
+	switch method {
 	case methodMemoryList, methodMemoryStatus, methodMemoryUpdate, methodMemoryForget:
 		return c.memoryRequest(method, params)
 	case methodWorkspaceList, methodWorkspaceAdd, methodWorkspaceRename, methodWorkspaceArchive:

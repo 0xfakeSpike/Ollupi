@@ -114,3 +114,12 @@ func TestMemoryProtocolUnavailable(t *testing.T) {
 		t.Fatalf("missing store: %v", err)
 	}
 }
+
+func TestCronProtocolUnavailable(t *testing.T) {
+	c := &conn{s: &Server{}, initialized: true}
+	for _, m := range []string{methodCronList, methodCronAdd, methodCronRemove, methodCronRun} {
+		if _, _, err := c.Call(m, json.RawMessage(`{"id":"j","spec":"@daily","prompt":"p"}`)); err == nil || err.Code != jsonrpc.CodeServerError {
+			t.Fatalf("%s without a scheduler: %v", m, err)
+		}
+	}
+}
