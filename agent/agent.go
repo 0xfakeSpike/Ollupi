@@ -1,92 +1,197 @@
-// Package agent defines an Agent (name, instructions, model, tools, approval
-// policy, as in the OpenAI Agents SDK and Claude's AgentDefinition) and the
-// Runner that executes one turn of it: a serial ReAct loop with one model and
-// one tool call at a time. The model decides when the work is done by
-// answering without a tool call.
-//
-// The Runner never keeps hidden state: every fact (model text, reasoning,
-// tool call, approval, result, plan, question) is recorded as a thread item
-// before the Runner acts on it, and everything it counts or shows the model
-// is derived from those items. When a call needs the user's approval or
-// answers, Run records the request and returns; running the turn again once
-// the item holds the response continues exactly where it stopped.
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/0xfakeSpike/ollupi/agent/memory"
+	"github.com/0xfakeSpike/ollupi/agent/permission"
+	"github.com/0xfakeSpike/ollupi/agent/skills"
+	"github.com/0xfakeSpike/ollupi/agent/tools"
+	"github.com/0xfakeSpike/ollupi/agent/tools/cron"
+	"github.com/0xfakeSpike/ollupi/agent/tools/plan"
+	"github.com/0xfakeSpike/ollupi/agent/tools/subagent"
+	"github.com/0xfakeSpike/ollupi/agent/tools/userinput"
+	"github.com/0xfakeSpike/ollupi/pkg/llm"
+	"github.com/0xfakeSpike/ollupi/repo"
 )
 
-// Agent is the definition of one agent.
+const (
+	workers       = 4
+	maxInputRunes = 4000
+)
+
+var (
+	errTurnActive     = errors.New("the thread already has a turn in progress")
+	ErrNoActiveTurn   = errors.New("the thread has no turn in progress")
+	ErrTurnMismatch   = errors.New("the expected turn is not the turn in progress")
+	errNoSuchRequest  = errors.New("the thread does not wait on this request")
+	errSubagentThread = errors.New("a subagent thread takes no input; send it to its parent conversation")
+)
+
 type Agent struct {
-	Name string
-	// Instructions are the agent's own system instructions. The Runner adds
-	// its loop rules, the workspace AGENTS.md, and the skills catalog.
-	Instructions string
-	// Model is the model name sent with every request.
-	Model          string
-	ModelProfileID string
-	ModelSettings  ModelSettings
-	// InheritModel marks a subagent whose model connection follows the
-	// parent turn. Explicit subagent models keep their configured connection.
-	InheritModel bool
-	// Tools lists the registry tools the agent may call, by exact name. Nil
-	// means every registry tool; empty means none. update_plan and request_user_input
-	// are always offered.
+	Name           string
+	Prompt         string
+	Models         []llm.Model
 	Tools          []string
-	ApprovalPolicy ApprovalPolicy
-	// Permissions are allow, ask, and deny rules, checked before the
-	// approval policy.
-	Permissions Permissions
-	// Subagents are the agents this agent may launch with the Agent tool.
-	// None means no Agent tool; subagents themselves have none.
-	Subagents []Subagent
+	ApprovalPolicy permission.Policy
+	Permissions    permission.Rules
+
+	Connections map[string]*llm.OpenAI
+	Providers   []tools.Provider
+	SkillsDir   string
+	Memory      *memory.Manager
+	Location    *time.Location
+	DB          *repo.DB
+	OnEvent     func(Event)
+
+	ctx        context.Context
+	registry   *tools.Registry
+	skills     *skills.Catalog
+	cron       *cron.Jobs
+	recovering bool
+	slots      map[string]*slot
+	queue      []string
+	busy       int
+	mu         sync.Mutex
+	background sync.WaitGroup
+	loops      sync.WaitGroup
 }
 
-// ModelSettings are optional per-request model parameters.
-type ModelSettings struct {
-	// EnableThinking, when set, is sent as the provider's "enable_thinking"
-	// extension (Qwen/DashScope).
-	EnableThinking *bool
+type slot struct {
+	cancel  context.CancelFunc
+	steered bool
 }
 
-// DefaultInstructions are used when the configuration gives none.
-const DefaultInstructions = "You are Ollupi, a personal assistant agent."
-
-// Validate checks the definition itself. Tool names are checked against the
-// catalog by Runner.Check.
-func (a Agent) Validate() error {
+func (a *Agent) Start(ctx context.Context) error {
 	if strings.TrimSpace(a.Name) == "" {
 		return fmt.Errorf("agent: name is required")
 	}
-	if strings.TrimSpace(a.Instructions) == "" {
-		return fmt.Errorf("agent %s: instructions are required", a.Name)
+	if a.DB == nil {
+		return fmt.Errorf("agent: a database is required")
 	}
-	if strings.TrimSpace(a.Model) == "" {
-		return fmt.Errorf("agent %s: model is required", a.Name)
+	a.ctx = ctx
+	a.slots = map[string]*slot{}
+	if err := a.buildTools(ctx); err != nil {
+		return err
 	}
-	if _, err := ParseApprovalPolicy(string(a.ApprovalPolicy)); err != nil {
+	if err := a.checkModels(); err != nil {
+		return err
+	}
+	if err := a.checkBudgets(); err != nil {
 		return fmt.Errorf("agent %s: %w", a.Name, err)
 	}
-	if _, err := a.Permissions.parse(); err != nil {
-		return fmt.Errorf("agent %s: %w", a.Name, err)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.recovering = true
+	if err := a.recoverLocked(); err != nil {
+		return err
 	}
-	launchable := make(map[string]bool, len(a.Subagents))
-	for _, s := range a.Subagents {
-		if launchable[s.Name] {
-			return fmt.Errorf("agent %s: subagent %q is listed twice", a.Name, s.Name)
-		}
-		if strings.TrimSpace(s.Description) == "" {
-			return fmt.Errorf("agent %s: subagent %q has no description", a.Name, s.Name)
-		}
-		launchable[s.Name] = true
-	}
-	seen := make(map[string]bool, len(a.Tools))
-	for _, name := range a.Tools {
-		if seen[name] {
-			return fmt.Errorf("agent %s: tool %q is listed twice", a.Name, name)
-		}
-		seen[name] = true
+	a.recovering = false
+	a.dispatchLocked()
+	a.loops.Add(1)
+	go a.keepTime()
+	if a.Memory != nil {
+		a.loops.Add(1)
+		go func() {
+			defer a.loops.Done()
+			a.Memory.Run(ctx)
+		}()
 	}
 	return nil
+}
+
+func (a *Agent) buildTools(ctx context.Context) error {
+	location := a.Location
+	if location == nil {
+		location = time.Local
+	}
+	a.cron = cron.New(a.DB, location)
+	providers := append(slices.Clone(a.Providers), plan.New(), subagent.New(), userinput.New(), a.cron)
+	if a.SkillsDir != "" {
+		var err error
+		if a.skills, err = skills.New(a.SkillsDir); err != nil {
+			return fmt.Errorf("agent: skills: %w", err)
+		}
+		providers = append(providers, a.skills)
+	}
+	var err error
+	if a.registry, err = tools.New(ctx, providers...); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	return nil
+}
+
+func (a *Agent) Wait() {
+	a.background.Wait()
+	if a.ctx.Err() != nil {
+		a.loops.Wait()
+	}
+}
+
+func (a *Agent) CallTool(ctx context.Context, threadID, tool string, arguments map[string]any) (tools.Result, error) {
+	caller := tools.Caller{}
+	if threadID != "" {
+		t, err := a.DB.ThreadRow(threadID)
+		if err != nil {
+			return tools.Result{}, fmt.Errorf("agent: thread %s: %w", threadID, err)
+		}
+		caller = a.callerOf(t)
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	return a.registry.Call(ctx, caller, tool, arguments), nil
+}
+
+func (a *Agent) callerOf(t repo.ThreadRow) tools.Caller {
+	c := tools.Caller{ThreadID: t.ID, WorkspaceID: t.WorkspaceID, Subagent: t.ParentThreadID != ""}
+	if w, err := a.DB.Workspace(t.WorkspaceID); err == nil {
+		c.Root = w.RootPath
+	}
+	return c
+}
+
+func (a *Agent) threadPolicy(t repo.ThreadRow) permission.Policy {
+	if t.ApprovalPolicy != "" {
+		return permission.Policy(t.ApprovalPolicy)
+	}
+	return a.ApprovalPolicy
+}
+
+func (a *Agent) rulesFor(t repo.ThreadRow) permission.Rules {
+	if t.ParentThreadID == "" {
+		return a.Permissions
+	}
+	rules := a.Permissions
+	rules.Deny = append(slices.Clone(rules.Deny), subagent.Tool)
+	return rules
+}
+
+func (a *Agent) toolsFor(names []string, policy permission.Policy, rules permission.Rules) ([]tools.ToolDescriptor, *permission.Checker, error) {
+	checker, err := permission.New(policy, rules, a.registry)
+	if err != nil {
+		return nil, nil, err
+	}
+	catalog := a.registry.Descriptors()
+	descriptors := catalog
+	if names != nil {
+		for i, name := range names {
+			if slices.Contains(names[:i], name) {
+				return nil, nil, fmt.Errorf("tool %q is listed twice", name)
+			}
+			if !slices.ContainsFunc(catalog, func(t tools.ToolDescriptor) bool { return t.Name == name }) {
+				return nil, nil, fmt.Errorf("tool %q is not in the tool registry", name)
+			}
+		}
+		descriptors = slices.DeleteFunc(slices.Clone(catalog), func(t tools.ToolDescriptor) bool {
+			return !slices.Contains(names, t.Name)
+		})
+	}
+	return slices.DeleteFunc(slices.Clone(descriptors), func(t tools.ToolDescriptor) bool { return !checker.Offers(t.Name) }), checker, nil
 }

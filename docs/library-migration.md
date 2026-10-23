@@ -6,6 +6,8 @@
 
 建议模块路径改为小写 `github.com/0xfakeSpike/ollupi`，核心包平铺在模块根下。
 
+> 2026-10-20 更新：库化之后又重新分了层，表里的去向已不是最终路径。agent 的组成部分（`thread`、`execution`、`tools`、`memory`、`cron`）移到了 `agent/` 下；`threadmanager`、`workspace` 移到 `session/`；`llm`、`sandbox`、`sqlite`、`jsonrpc`、`redact` 移到 `pkg/`；`storage` 改名为 `repo`；`tools/shell`、`tools/mcp` 从应用移入 `agent/tools/`，`skills` 移入 `agent/skills`。2026-10-20 晚：去掉了只为拆包而定义的 interface（`Persistence`、`Store`、`ToolRegistry` 等），各包的 SQL 归到数据所属的包，`repo` 只剩连接与迁移。现在的结构见 README 的「包结构」一节，依赖方向的规则见同一节。
+
 | 现在的包 | 去向 | 新 import path |
 | --- | --- | --- |
 | internal/agent | 核心库 | ollupi/agent |
@@ -43,7 +45,7 @@
 
 ## 稳定公开 API
 
-一旦公开即为承诺：`agent.Runner`、`agent.Agent`、`agent.Turn/Result/Recorder`、`thread.Item/View/Plan/Approval`、`threadmanager.Manager`、`memory.Reader/Entry`、`redact.Redactor`、`tools.Registry/ToolDescriptor/Provider`、`gateway.Server`、`llm.ChatModel`、`execution.Context`。
+一旦公开即为承诺：`agent.Agent`、`runtime.Runtime/Turn/Outcome`、`repo.ThreadRow/TurnRow/ItemRow/ThreadView/Approval`、`memory.Manager`、`repo.MemoryRow/MemoryStatus`、`redact.Redactor`、`tools.Registry/ToolDescriptor/Provider`、`gateway.Server`、`llm.ChatModel`。
 
 ## 推进顺序
 

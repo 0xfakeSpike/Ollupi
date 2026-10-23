@@ -1,26 +1,22 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
-	"unicode/utf8"
 
-	"github.com/0xfakeSpike/ollupi/jsonrpc"
-	"github.com/0xfakeSpike/ollupi/memory"
+	"github.com/0xfakeSpike/ollupi/agent/memory"
+	"github.com/0xfakeSpike/ollupi/pkg/jsonrpc"
+	"github.com/0xfakeSpike/ollupi/repo"
 )
 
 const errMemoryConflict = -32009
 
 func (c *conn) memoryRequest(method string, params json.RawMessage) (any, func(), *jsonrpc.Error) {
-	store := c.s.memory
+	store := c.s.agent.Memory
 	if store == nil {
 		return nil, nil, jsonrpc.Errorf(jsonrpc.CodeServerError, "long-term memory is unavailable")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	var result any
 	var err error
 	switch method {
@@ -32,19 +28,19 @@ func (c *conn) memoryRequest(method string, params json.RawMessage) (any, func()
 		if rpcErr := jsonrpc.DecodeParams(params, &p); rpcErr != nil {
 			return nil, nil, rpcErr
 		}
-		var entries []memory.Entry
-		entries, err = store.MemoryList(ctx, p.WorkspaceID, p.IncludeGlobal)
+		var entries []repo.MemoryRow
+		entries, err = c.s.agent.DB.Memories(p.WorkspaceID, p.IncludeGlobal)
 		if entries == nil {
-			entries = []memory.Entry{}
+			entries = []repo.MemoryRow{}
 		}
 		result = struct {
-			Data []memory.Entry `json:"data"`
+			Data []repo.MemoryRow `json:"data"`
 		}{entries}
 	case methodMemoryStatus:
 		if rpcErr := jsonrpc.DecodeParams(params, &struct{}{}); rpcErr != nil {
 			return nil, nil, rpcErr
 		}
-		result, err = store.MemoryStatus(ctx)
+		result, err = store.Status()
 	case methodMemoryUpdate, methodMemoryForget:
 		var p struct {
 			ID       string `json:"id"`
@@ -58,16 +54,13 @@ func (c *conn) memoryRequest(method string, params json.RawMessage) (any, func()
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "id and positive revision are required")
 		}
 		if method == methodMemoryUpdate {
-			if strings.TrimSpace(p.Text) == "" || utf8.RuneCountInString(strings.TrimSpace(p.Text)) > 4000 {
-				return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "memory text must contain 1 to 4000 characters")
-			}
-			var entry memory.Entry
-			entry, err = store.MemoryEdit(ctx, p.ID, p.Revision, strings.TrimSpace(p.Text))
+			var entry repo.MemoryRow
+			entry, err = store.Edit(p.ID, p.Revision, p.Text)
 			result = struct {
-				Memory memory.Entry `json:"memory"`
+				Memory repo.MemoryRow `json:"memory"`
 			}{entry}
 		} else {
-			err = store.MemoryForget(ctx, p.ID, p.Revision)
+			err = store.Forget(p.ID, p.Revision)
 			result = struct{}{}
 		}
 	}
