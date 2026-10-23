@@ -3,49 +3,26 @@ package memory
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"slices"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/0xfakeSpike/ollupi/pkg/llm"
 	"github.com/0xfakeSpike/ollupi/repo"
-	"github.com/google/uuid"
 )
-
-func (m *Manager) TurnContext(turnID, workspaceID string, items []repo.ItemRow, budget int) (it repo.ItemRow, ok bool) {
-	var requests []string
-	for _, it := range items {
-		if it.Type == repo.ItemMemoryContext && it.Status == repo.ItemCompleted {
-			return repo.ItemRow{}, false
-		}
-		if it.Type == repo.ItemUserMessage {
-			requests = append(requests, it.Text)
-		}
-	}
-	entries, text, err := m.choose(workspaceID, strings.Join(requests, "\n\n"), budget)
-	if err != nil {
-		log.Printf("memory: turn %s starts without memory: it cannot be read", turnID)
-		entries, text = nil, ""
-	}
-	now := time.Now().UTC()
-	return repo.ItemRow{
-		ID: uuid.NewString(), TurnID: turnID, Type: repo.ItemMemoryContext, Status: repo.ItemCompleted,
-		Memory: entries, Text: text, StartedAt: now, CompletedAt: &now,
-	}, true
-}
 
 const maxTurnEntries = 20
 
-func (m *Manager) choose(workspaceID, query string, budget int) ([]repo.MemoryReference, string, error) {
+// Context selects and renders the long-term memories a turn should see,
+// limited by the caller's token budget. An empty result is a valid answer.
+func (m *Manager) Context(workspaceID, query string, budget int) (Context, error) {
 	if !m.opts.Use || budget <= 0 {
-		return nil, "", nil
+		return Context{}, nil
 	}
 	entries, err := m.db.Memories(workspaceID, true)
 	if err != nil {
-		return nil, "", err
+		return Context{}, err
 	}
 	eligible := make([]repo.MemoryRow, 0, len(entries))
 	for _, e := range entries {
@@ -59,7 +36,7 @@ func (m *Manager) choose(workspaceID, query string, budget int) ([]repo.MemoryRe
 		if strings.TrimSpace(e.Text) == "" {
 			continue
 		}
-		next := append(slices.Clone(chosen), repo.MemoryReference{ID: e.ID, Revision: e.Revision, WorkspaceID: e.WorkspaceID, Topic: e.Topic, Text: e.Text})
+		next := append(slices.Clone(chosen), repo.MemoryReference{ID: e.ID, WorkspaceID: e.WorkspaceID, Topic: e.Topic, Text: e.Text})
 		rendered := renderContext(next)
 		if llm.EstimateTokens(rendered) > budget {
 			continue
@@ -69,7 +46,7 @@ func (m *Manager) choose(workspaceID, query string, budget int) ([]repo.MemoryRe
 			break
 		}
 	}
-	return chosen, text, nil
+	return Context{Entries: chosen, Text: text}, nil
 }
 
 func renderContext(entries []repo.MemoryReference) string {

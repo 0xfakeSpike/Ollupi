@@ -20,17 +20,18 @@ func (u *Usage) Add(v Usage) {
 }
 
 type TurnRow struct {
-	ID             string     `gorm:"primaryKey" json:"id"`
-	ThreadID       string     `gorm:"not null;uniqueIndex:turns_thread_seq,priority:1" json:"threadId"`
-	Thread         *ThreadRow `gorm:"constraint:OnDelete:CASCADE" json:"-"`
-	Seq            int        `gorm:"not null;uniqueIndex:turns_thread_seq,priority:2" json:"seq"`
-	Status         string     `gorm:"not null" json:"status"`
-	Model          llm.Model  `gorm:"not null;serializer:json;check:turns_model,json_valid(model)" json:"model"`
-	ApprovalPolicy string     `gorm:"not null" json:"approvalPolicy"`
-	Usage          Usage      `gorm:"embedded" json:"usage"`
-	Error          string     `gorm:"not null;default:''" json:"error,omitempty"`
-	StartedAt      time.Time  `gorm:"not null" json:"startedAt"`
-	CompletedAt    *time.Time `json:"completedAt,omitempty"`
+	ID             string          `gorm:"primaryKey" json:"id"`
+	ThreadID       string          `gorm:"not null;uniqueIndex:turns_thread_seq,priority:1" json:"threadId"`
+	Thread         *ThreadRow      `gorm:"constraint:OnDelete:CASCADE" json:"-"`
+	Seq            int             `gorm:"not null;uniqueIndex:turns_thread_seq,priority:2" json:"seq"`
+	Status         string          `gorm:"not null" json:"status"`
+	Model          llm.Model       `gorm:"not null;serializer:json;check:turns_model,json_valid(model)" json:"model"`
+	ApprovalPolicy string          `gorm:"not null" json:"approvalPolicy"`
+	Usage          Usage           `gorm:"embedded" json:"usage"`
+	Error          string          `gorm:"not null;default:''" json:"error,omitempty"`
+	Permissions    PermissionRules `gorm:"not null;default:'{}';serializer:json;check:turns_permissions,json_valid(permissions)" json:"permissions,omitempty"`
+	StartedAt      time.Time       `gorm:"not null" json:"startedAt"`
+	CompletedAt    *time.Time      `json:"completedAt,omitempty"`
 }
 
 func (TurnRow) TableName() string { return "turns" }
@@ -67,6 +68,11 @@ func (d *DB) UpdateTurn(row TurnRow) error {
 func (d *DB) ActiveTurn(threadID string) (TurnRow, error) {
 	var row TurnRow
 	return row, notFound(d.gorm.Where("thread_id = ? AND status = 'inProgress'", threadID).Take(&row).Error)
+}
+
+func (d *DB) Turn(id string) (TurnRow, error) {
+	var row TurnRow
+	return row, notFound(d.gorm.Where("id = ?", id).Take(&row).Error)
 }
 
 func (d *DB) EndedTurn(id string) (TurnRow, error) {

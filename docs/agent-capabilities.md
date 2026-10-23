@@ -136,8 +136,8 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 | 5.2 | 自动压缩 | 快满时由模型摘要 | 有 | 有 | 有 | 超过所用模型输入上限的 80%（按校准后的大小）时压缩，记为 contextCompaction item；压缩请求超限时整段丢最早的 turn，但保留上一次的摘要 |
 | 5.3 | 手动压缩 | 用户触发压缩，可附要求 | 有：`/compact` | 有：`/compact [指令]` | 无 | |
 | 5.4 | 压缩后保留关键内容 | 保留用户原话、已加载的指令 | 有：保留近期用户消息 | 有 | 有 | 保留近期用户原话（10% 预算）和已激活技能的说明（合计 15% 预算，优先最近激活的，放不下的只留名字并提示重新加载） |
-| 5.5 | 长期记忆：写入 | 把偏好、事实记下来供以后用 | ? | 有：`#` 快捷写入、`/memory` | 有 | 独立 MemoryManager 扫描业务 SQL 增量，由 LLM 提炼 / 修订；正文、来源、版本和进度保存在 SQLite；Memory 页面可编辑、忘记 |
-| 5.6 | 长期记忆：跨会话召回 | 新会话自动带上记忆 | 部分：靠 `AGENTS.md` | 有：靠 `CLAUDE.md` 记忆 | 有 | 按全局 / 工作区检索，含中文词组匹配；每轮保存记忆快照，预算为输入的 5%，最多 2000 tokens |
+| 5.5 | 长期记忆：写入 | 把偏好、事实记下来供以后用 | ? | 有：`#` 快捷写入、`/memory` | 有 | 独立 MemoryManager 在 turn 结束后扫描轨迹增量，由 LLM 提炼 / 修订；正文、来源和进度保存在 SQLite，条目不带版本号；Memory 页面可编辑、忘记 |
+| 5.6 | 长期记忆：跨会话召回 | 新会话自动带上记忆 | 部分：靠 `AGENTS.md` | 有：靠 `CLAUDE.md` 记忆 | 有 | 按全局 / 工作区检索，含中文词组匹配；每轮开始冻结一次记忆，预算为输入的 5%，最多 2000 tokens |
 | 5.7 | 检索增强 | 向量检索、知识库 | 无 | 无 | 无 | |
 
 ## 6. 编排
@@ -157,8 +157,8 @@ Codex 和 Claude Code 两列来自公开文档和发布说明，两者更新很�
 | # | 能力 | 说明 | Codex | Claude Code | Ollupi | Ollupi 现状与位置 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.1 | 审批策略 | 哪些调用需要人批准 | 有：`untrusted`、`on-failure`、`on-request`、`never` | 有：default、acceptEdits、plan、bypassPermissions | 有 | `untrusted`、`on-request`、`never`（`agent/permission/policy.go`） |
-| 7.2 | 按会话覆盖审批策略 | 单个会话用不同策略 | 有 | 有 | 有 | thread 的 `approvalPolicy` |
-| 7.3 | 允许、拒绝规则 | 按工具和参数模式配置 | 部分：命令执行规则 | 有：`Bash(git:*)` 等 | 有 | `agent.permissions` 的 allow、ask、deny，语法同 Claude Code：`工具名` 或 `run_command(git diff *)`；按 deny、ask、allow 顺序第一个匹配生效，deny 单写工具名时不提供该工具；规则写错启动即报错（`agent/permission/rules.go`；判断顺序见 `permission.Decide`） |
+| 7.2 | 按会话覆盖审批策略 | 单个会话用不同策略 | 有 | 有 | 有 | thread 的 `approvalPolicy`；解析顺序是 会话 > 工作区 > agent 默认 |
+| 7.3 | 允许、拒绝规则 | 按工具和参数模式配置 | 部分：命令执行规则 | 有：`Bash(git:*)` 等 | 有 | agent 默认的 allow、ask、deny 和工作区的 `permissions` 字段，语法同 Claude Code：`工具名` 或 `run_command(git diff *)`；按 deny、ask、allow 顺序第一个匹配生效，deny 单写工具名时不提供该工具；规则写错启动即报错（`agent/permission/rules.go`；判断顺序见 `permission.Decide`）；解析出的规则随 turn 一起快照 |
 | 7.4 | "本次会话一直允许" | 批准一次，后续同类不再询问 | 有 | 有：不再询问 | 有 | Codex 的 `acceptForSession`：同一 thread 里相同命令（其他工具为同一工具）不再询问，记在审批 item 上，重启后仍有效；ask 规则拦下的调用不提供此选项 |
 | 7.5 | 系统级沙箱 | 隔离文件系统和网络 | 有：Seatbelt、Landlock、seccomp | 部分：可选沙箱 | 部分 | 只有 macOS Seatbelt 一套：按策略生成默认拒绝的 profile，基础规则取自 Codex；工作目录内拒读凭据、git 元数据只读、开网时关闭本机 Unix socket；非 macOS 上沙箱模式启动即报错，只能显式选 `full-access`（`pkg/sandbox`、`agent/tools/shell`）。（haoagent 的 OpenCLI 曾经通过 `sandbox.RunHost` 在沙箱外运行；Ollupi 里没有使用方，这个入口已删除） |
 | 7.6 | 沙箱分级 | 只读、可写工作区、完全放开 | 有 | 部分 | 有 | `exec.sandbox_mode`：`read-only` / `workspace-write`（默认）/ `full-access`（不使用沙箱） |

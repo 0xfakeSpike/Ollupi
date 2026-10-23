@@ -17,8 +17,8 @@ Extract only durable user preferences, project constraints and decisions, stable
 The scope is fixed: empty workspaceId means General/global; otherwise every operation belongs only to that workspace. Never promote project facts to global scope.
 Reconcile with the supplied existing memories. Reuse their stable topic and ID when updating. An update can consolidate multiple facts into one coherent note; retire a redundant old note in a separate operation. Retired facts can be replaced when fresh evidence warrants it. Never restore a forgotten memory, its topic, or its source evidence. Never modify or contradict userEdited entries; these are protected manual corrections. Explicit user corrections take precedence. A user request is not proof of implementation; an assistant claim is not verified tool evidence. Failed or interrupted work must remain qualified. Preserve conditions, negations, uncertainty, and material version changes. Deleted sources justify retiring unsupported notes, not inventing replacement facts. A truncated observation proves only its visible contents.
 Write concise self-contained text in the user's language. Each note covers one reusable topic. Return ONLY a JSON object with "operations", at most 12 entries, with these fields:
-{"action":"add|update|retire","id":"existing ID for update/retire","revision":1,"topic":"stable short descriptive topic for add/update","kind":"preference|decision|fact|procedure","text":"memory text for add/update","sources":[{"table":"items","id":"evidence ID","digest":"exact provided digest","operation":"exact provided operation when present"}]}
-For update/retire copy the current ID and revision. Add omits ID and revision. Every operation must cite at least one fact supplied in this batch. Cite the specific records that support the claim, not workspace or thread metadata supplied merely for context. Existing source references may additionally be retained. Never invent IDs or evidence. Use newer explicit evidence to revise automatic notes when they conflict; a new extraction batch can include older records and is not itself proof of recency. Changes in tables are related observations, not independent confirmation of the same fact.`
+{"action":"add|update|retire","id":"existing ID for update/retire","topic":"stable short descriptive topic for add/update","kind":"preference|decision|fact|procedure","text":"memory text for add/update","sources":[{"table":"items","id":"evidence ID","operation":"exact provided operation when present"}]}
+For update/retire copy the current ID. Add omits ID. Every operation must cite at least one fact supplied in this batch. Cite the specific records that support the claim, not workspace or thread metadata supplied merely for context. Existing source references may additionally be retained. Never invent IDs or evidence. Use newer explicit evidence to revise automatic notes when they conflict; a new extraction batch can include older records and is not itself proof of recency. Changes in tables are related observations, not independent confirmation of the same fact.`
 
 func extractionInput(batch *Batch, budget int) (string, int, error) {
 	facts := make([]Fact, 0, len(batch.Facts))
@@ -81,7 +81,7 @@ func parseOperations(content string, batch *Batch) ([]Operation, error) {
 	existing := map[string]repo.MemoryRow{}
 	sources := map[string]repo.MemorySource{}
 	fresh := map[string]bool{}
-	key := func(s repo.MemorySource) string { return s.Table + "\x00" + s.ID + "\x00" + s.Digest }
+	key := func(s repo.MemorySource) string { return s.Table + "\x00" + s.ID }
 	for _, e := range batch.Existing {
 		existing[e.ID] = e
 		for _, s := range e.Sources {
@@ -99,13 +99,13 @@ func parseOperations(content string, batch *Batch) ([]Operation, error) {
 		op.Topic, op.Text = strings.TrimSpace(op.Topic), strings.TrimSpace(op.Text)
 		switch op.Action {
 		case "add":
-			if op.ID != "" || op.Revision != 0 {
+			if op.ID != "" {
 				return nil, errors.New("memory add unexpectedly targeted an existing record")
 			}
 		case "update", "retire":
 			e, ok := existing[op.ID]
-			if !ok || e.WorkspaceID != batch.WorkspaceID || e.Revision != op.Revision || e.Status == "forgotten" || touched[op.ID] {
-				return nil, errors.New("memory extraction targeted an unavailable record or revision")
+			if !ok || e.WorkspaceID != batch.WorkspaceID || e.Status == "forgotten" || touched[op.ID] {
+				return nil, errors.New("memory extraction targeted an unavailable record")
 			}
 			if e.UserEdited {
 				continue
@@ -143,34 +143,4 @@ func parseOperations(content string, batch *Batch) ([]Operation, error) {
 		accepted = append(accepted, *op)
 	}
 	return accepted, nil
-}
-
-func visibleEvidence(batch *Batch) *Batch {
-	copy := *batch
-	copy.Facts = make([]Fact, 0, len(batch.Facts))
-	blocked := map[string]bool{}
-	priority := map[string]int{"items": 1, "cron_jobs": 2, "turns": 3, "threads": 4, "workspaces": 5}
-	key := func(s repo.MemorySource) string { return s.Table + "\x00" + s.ID + "\x00" + s.Digest }
-	for _, e := range batch.Existing {
-		if e.Status != "forgotten" {
-			continue
-		}
-		best := 100
-		for _, s := range e.Sources {
-			if p, ok := priority[s.Table]; ok {
-				best = min(best, p)
-			}
-		}
-		for _, s := range e.Sources {
-			if priority[s.Table] == best {
-				blocked[key(s)] = true
-			}
-		}
-	}
-	for _, f := range batch.Facts {
-		if !blocked[key(f.Source)] {
-			copy.Facts = append(copy.Facts, f)
-		}
-	}
-	return &copy
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -60,7 +61,7 @@ func (rt *Runtime) Step(ctx context.Context) (Outcome, repo.Usage, error) {
 	if err := rt.start(); err != nil {
 		return Done, repo.Usage{}, err
 	}
-	outcome, err := rt.run(ctx)
+	outcome, err := rt.step(ctx)
 	return outcome, rt.usage, err
 }
 
@@ -80,13 +81,30 @@ func (rt *Runtime) start() error {
 		Skills: catalog, SkillTokens: rt.Contexts.SkillBudget(),
 	})
 	if rt.Memory != nil {
-		if it, ok := rt.Memory.TurnContext(rt.Turn.ID, rt.Caller.WorkspaceID, rt.Items, rt.Contexts.MemoryBudget()); ok {
-			if _, err := rt.record(it); err != nil {
+		ctx, err := rt.Memory.Context(rt.Caller.WorkspaceID, turnQuery(rt.Items), rt.Contexts.MemoryBudget())
+		if err != nil {
+			log.Printf("memory: turn %s starts without memory: %v", rt.Turn.ID, err)
+		} else if len(ctx.Entries) > 0 {
+			now := time.Now().UTC()
+			if _, err := rt.record(repo.ItemRow{
+				ID: uuid.NewString(), TurnID: rt.Turn.ID, Type: repo.ItemMemoryContext, Status: repo.ItemCompleted,
+				Memory: ctx.Entries, Text: ctx.Text, StartedAt: now, CompletedAt: &now,
+			}); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func turnQuery(items []repo.ItemRow) string {
+	var requests []string
+	for _, it := range items {
+		if it.Type == repo.ItemUserMessage {
+			requests = append(requests, it.Text)
+		}
+	}
+	return strings.Join(requests, "\n\n")
 }
 
 func (rt *Runtime) tool(name string) (tools.ToolDescriptor, bool) {
@@ -108,8 +126,10 @@ func Specs(descriptors []tools.ToolDescriptor) []llm.ToolSpec {
 	return specs
 }
 
-func (rt *Runtime) run(ctx context.Context) (Outcome, error) {
-	if outcome, ended, err := rt.act(ctx); ended {
+// step is one iteration: finish calls left over from the previous iteration,
+// ask the model once, then run the calls the model returned.
+func (rt *Runtime) step(ctx context.Context) (Outcome, error) {
+	if outcome, done, err := rt.resume(ctx); done {
 		return outcome, err
 	}
 	if rt.modelCalls() >= maxModelCalls {
@@ -122,27 +142,29 @@ func (rt *Runtime) run(ctx context.Context) (Outcome, error) {
 	if len(resp.Message.ToolCalls) == 0 {
 		return Done, nil
 	}
-	if outcome, ended, err := rt.act(ctx); ended {
+	outcome, done, err := rt.drain(ctx)
+	if done {
 		return outcome, err
 	}
 	return Continue, nil
 }
 
-func (rt *Runtime) act(ctx context.Context) (Outcome, bool, error) {
-	halt, pending, err := rt.handleCalls(ctx)
+// resume finishes the calls left over from the previous iteration; drain runs
+// the calls the model just returned. Both plan first, then execute.
+func (rt *Runtime) resume(ctx context.Context) (Outcome, bool, error) {
+	plan, err := rt.planCalls(ctx)
 	if err != nil {
 		return Done, true, err
 	}
-	if pending != nil {
-		return Wait, true, nil
+	return rt.executePlan(ctx, plan)
+}
+
+func (rt *Runtime) drain(ctx context.Context) (Outcome, bool, error) {
+	plan, err := rt.planCalls(ctx)
+	if err != nil {
+		return Done, true, err
 	}
-	if rt.awaiting() {
-		return Wait, true, nil
-	}
-	if halt != "" {
-		return Done, true, rt.finish(ctx, halt)
-	}
-	return Continue, false, nil
+	return rt.executePlan(ctx, plan)
 }
 
 const finalAnswerNotice = `[runtime] Tool use has stopped: %s.

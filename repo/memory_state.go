@@ -38,19 +38,19 @@ type MemoryStatus struct {
 func (d *DB) MemoryStatus() (MemoryStatus, error) {
 	var s MemoryStatus
 	g := d.gorm
-	if err := g.Model(&MemoryChangeRow{}).Count(&s.Pending).Error; err != nil {
+	if err := g.Model(&MemoryEventRow{}).Count(&s.Pending).Error; err != nil {
 		return s, err
 	}
 	if err := g.Model(&MemoryRow{}).Where("status = 'active'").Count(&s.Active).Error; err != nil {
 		return s, err
 	}
-	if err := g.Model(&MemoryChangeRow{}).Where("attempts > 0").Count(&s.Failed).Error; err != nil {
+	if err := g.Model(&MemoryEventRow{}).Where("attempts > 0").Count(&s.Failed).Error; err != nil {
 		return s, err
 	}
 	if err := g.Where("id = 1").Take(&s.MemoryStateRow).Error; err != nil {
 		return s, err
 	}
-	var failed MemoryChangeRow
+	var failed MemoryEventRow
 	err := g.Where("attempts > 0").Order("id").Limit(1).Take(&failed).Error
 	if err == nil && failed.LastError != "" {
 		s.LastError = failed.LastError
@@ -71,7 +71,7 @@ func (d *DB) SetMemorySuccess(now time.Time, report MemoryReport) error {
 	}
 	return d.gorm.Model(&MemoryStateRow{}).Where("id = 1").Updates(map[string]any{
 		"last_success": now.UTC(),
-		"last_error":   gorm.Expr("CASE WHEN EXISTS (SELECT 1 FROM memory_changes WHERE attempts > 0) THEN last_error ELSE '' END"),
+		"last_error":   gorm.Expr("CASE WHEN EXISTS (SELECT 1 FROM memory_events WHERE attempts > 0) THEN last_error ELSE '' END"),
 		"last_report":  string(raw),
 	}).Error
 }

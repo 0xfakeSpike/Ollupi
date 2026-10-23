@@ -95,7 +95,7 @@ func (m *Manager) RunOnce(ctx context.Context) (err error) {
 	defer m.runMu.Unlock()
 	var batch *Batch
 	defer func() {
-		if err != nil && ctx.Err() == nil && !errors.Is(err, ErrConflict) {
+		if err != nil && ctx.Err() == nil {
 			if batch != nil {
 				_ = deferBatch(m.db, batch, err.Error())
 			}
@@ -115,19 +115,13 @@ func (m *Manager) RunOnce(ctx context.Context) (err error) {
 
 	report := repo.MemoryReport{Model: m.opts.Model.Clone(), EstimatedInputTokens: estimated}
 	if len(evidence.Facts) == 0 {
-		if err := commit(m.db, batch, nil, report); err != nil {
-			return commitError(err)
-		}
-		return nil
+		return commit(m.db, batch, nil, report)
 	}
 	ops, err := m.extract(ctx, evidence, payload, &report)
 	if err != nil {
 		return err
 	}
-	if err := commit(m.db, batch, ops, report); err != nil {
-		return commitError(err)
-	}
-	return nil
+	return commit(m.db, batch, ops, report)
 }
 
 // gatherEvidence reads the next pending batch and, if needed, shrinks it until
@@ -138,7 +132,7 @@ func (m *Manager) gatherEvidence() (batch, evidence *Batch, payload string, esti
 	for {
 		batch, err = nextBatch(m.db, limit)
 		if err != nil {
-			return nil, nil, "", 0, errors.New("could not read pending memory evidence")
+			return nil, nil, "", 0, fmt.Errorf("could not read pending memory evidence: %w", err)
 		}
 		if batch == nil {
 			return nil, nil, "", 0, nil
@@ -167,7 +161,7 @@ func (m *Manager) extract(ctx context.Context, evidence *Batch, payload string, 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("memory extraction model request failed; check the configured model connection")
+		return nil, fmt.Errorf("memory extraction model request failed: %w", err)
 	}
 	if len(response.Message.ToolCalls) != 0 || (response.FinishReason != "" && response.FinishReason != "stop") {
 		return nil, errors.New("memory extraction did not produce a complete text response")
@@ -181,11 +175,12 @@ func (m *Manager) extract(ctx context.Context, evidence *Batch, payload string, 
 	return ops, nil
 }
 
-func commitError(err error) error {
-	if errors.Is(err, ErrConflict) {
-		return ErrConflict
+func (m *Manager) List(workspaceID string, includeGlobal bool) ([]repo.MemoryRow, error) {
+	entries, err := m.db.Memories(workspaceID, includeGlobal)
+	if entries == nil {
+		entries = []repo.MemoryRow{}
 	}
-	return errors.New("could not save memory changes; pending evidence will be retried")
+	return entries, err
 }
 
 func (m *Manager) Status() (repo.MemoryStatus, error) {
@@ -194,7 +189,7 @@ func (m *Manager) Status() (repo.MemoryStatus, error) {
 	return s, err
 }
 
-func (m *Manager) Edit(id string, revision int, text string) (repo.MemoryRow, error) {
+func (m *Manager) Edit(id, text string) (repo.MemoryRow, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || utf8.RuneCountInString(text) > 4000 {
 		return repo.MemoryRow{}, errors.New("memory text must contain 1 to 4000 characters")
@@ -208,36 +203,28 @@ func (m *Manager) Edit(id string, revision int, text string) (repo.MemoryRow, er
 		if err != nil {
 			return err
 		}
-		if e.Revision != revision || e.Status == "forgotten" {
-			return ErrConflict
+		if e.Status == "forgotten" {
+			return errors.New("a forgotten memory cannot be edited")
 		}
 		e.Text, e.UserEdited, e.Status = text, true, "active"
-		e.Revision++
 		e.UpdatedAt = time.Now().UTC()
 		out = e
-		return tx.SaveMemory(e, "user_edit")
+		return tx.SaveMemory(e)
 	})
 	return out, err
 }
 
-func (m *Manager) Forget(id string, revision int) error {
+func (m *Manager) Forget(id string) error {
 	return m.db.Tx(func(tx *repo.DB) error {
 		e, err := tx.Memory(id)
 		if err != nil {
 			return err
 		}
-		if e.Revision != revision {
-			return ErrConflict
-		}
 		if e.Status == "forgotten" {
 			return nil
 		}
 		e.Status, e.Text = "forgotten", ""
-		e.Revision++
 		e.UpdatedAt = time.Now().UTC()
-		if err := tx.DeleteMemoryRevisions(id); err != nil {
-			return err
-		}
-		return tx.SaveMemory(e, "user_forget")
+		return tx.SaveMemory(e)
 	})
 }

@@ -5,133 +5,135 @@ import (
 	"strings"
 	"time"
 
-	"github.com/0xfakeSpike/ollupi/agent/permission"
-	"github.com/0xfakeSpike/ollupi/pkg/llm"
 	"github.com/0xfakeSpike/ollupi/repo"
-	"github.com/google/uuid"
 )
 
-func (a *Agent) StartTurn(threadID, text, connection string) (repo.TurnRow, error) {
-	text, err := checkMessage(text)
-	if err != nil {
-		return repo.TurnRow{}, err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	view, ok := a.ReadThread(threadID)
-	if !ok {
-		return repo.TurnRow{}, fmt.Errorf("agent: thread %s not found", threadID)
-	}
-	if view.Thread.ParentThreadID != "" {
-		return repo.TurnRow{}, errSubagentThread
-	}
-	model, err := a.conversationModel(view, connection)
-	if err != nil {
-		return repo.TurnRow{}, err
-	}
-	return a.beginTurnLocked(view, repo.NewUserMessage(uuid.NewString(), "", text, time.Now().UTC()), model, a.threadPolicy(view.Thread))
-}
-
-func (a *Agent) beginTurnLocked(view repo.ThreadView, message repo.ItemRow, model llm.Model, policy permission.Policy) (repo.TurnRow, error) {
-	threadID := view.Thread.ID
-	if _, active := view.ActiveTurn(); active {
-		return repo.TurnRow{}, errTurnActive
-	}
-	if view.Thread.ParentThreadID == "" {
-		if err := a.checkWorkspace(view.Thread.WorkspaceID); err != nil {
-			return repo.TurnRow{}, err
+func (a *Agent) insertTurn(threadID string, turn repo.TurnRow, input []repo.ItemRow) (repo.TurnRow, error) {
+	err := a.DB.Tx(func(tx *repo.DB) error {
+		v, err := tx.Thread(threadID)
+		if err != nil {
+			return err
 		}
-	}
-	turn := repo.TurnRow{
-		ID: uuid.NewString(), ThreadID: threadID, Status: repo.TurnInProgress,
-		Model: model.Clone(), ApprovalPolicy: string(policy), StartedAt: time.Now().UTC(),
-	}
-	message.TurnID = turn.ID
-	turn, err := a.insertTurn(threadID, turn, []repo.ItemRow{message})
+		if active, ok := v.ActiveTurn(); ok {
+			return fmt.Errorf("thread %s already has turn %s in progress", threadID, active.ID)
+		}
+		if turn.ID == "" || turn.Status != repo.TurnInProgress {
+			return fmt.Errorf("a new turn needs an id and status inProgress")
+		}
+		turn.ThreadID, turn.Seq = threadID, len(v.Turns)+1
+		if err := tx.CreateTurn(turn); err != nil {
+			return err
+		}
+		t := v.Thread
+		for _, it := range input {
+			if it.Type == repo.ItemUserMessage && t.Preview == "" {
+				t.Preview = clip(firstLine(it.Text), 80)
+			}
+			if err := saveItemIn(tx, threadID, it); err != nil {
+				return err
+			}
+		}
+		t.UpdatedAt = time.Now().UTC()
+		return tx.UpdateThread(t)
+	})
 	if err != nil {
-		return repo.TurnRow{}, err
-	}
-	a.emit(Event{Kind: EventTurnStarted, Thread: view.Thread, Turn: turn})
-	a.emitItem(view.Thread, turn, message, true)
-	a.enqueueLocked(threadID)
-	a.emitStatus(threadID)
-	return turn, nil
-}
-
-func (a *Agent) SteerTurn(threadID, expectedTurnID, text string) (repo.TurnRow, error) {
-	text, err := checkMessage(text)
-	if err != nil {
-		return repo.TurnRow{}, err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	view, ok := a.ReadThread(threadID)
-	if !ok {
-		return repo.TurnRow{}, fmt.Errorf("agent: thread %s not found", threadID)
-	}
-	if view.Thread.ParentThreadID != "" {
-		return repo.TurnRow{}, errSubagentThread
-	}
-	turn, active := view.ActiveTurn()
-	if !active {
-		return repo.TurnRow{}, ErrNoActiveTurn
-	}
-	if turn.ID != expectedTurnID {
-		return repo.TurnRow{}, fmt.Errorf("%w (expected %s, in progress %s)", ErrTurnMismatch, expectedTurnID, turn.ID)
-	}
-	stored, isNew, err := a.recordItem(threadID, repo.NewUserMessage(uuid.NewString(), turn.ID, text, time.Now().UTC()))
-	if err != nil {
-		return repo.TurnRow{}, err
-	}
-	a.emitItem(view.Thread, turn, stored, isNew)
-	if sl, ok := a.slots[threadID]; ok && !a.queuedLocked(threadID) {
-		sl.steered = true
+		return repo.TurnRow{}, fmt.Errorf("agent: begin turn: %w", err)
 	}
 	return turn, nil
 }
 
-func (a *Agent) InterruptTurn(threadID string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if sl, ok := a.slots[threadID]; ok {
-		a.stopLocked(threadID, sl)
+func (a *Agent) addUsage(threadID, turnID string, u repo.Usage) error {
+	if u == (repo.Usage{}) {
 		return nil
 	}
-	view, ok := a.ReadThread(threadID)
-	if !ok {
-		return fmt.Errorf("agent: thread %s not found", threadID)
-	}
-	turn, active := view.ActiveTurn()
-	if !active {
-		return ErrNoActiveTurn
-	}
-	calls := view.AgentCalls()
-	turn.Status = repo.TurnInterrupted
-	turn.Error = "interrupted while waiting for the user"
-	if len(calls) > 0 {
-		turn.Error = "interrupted while waiting for subagents"
-	}
-	a.endLocked(turn)
-	for _, call := range calls {
-		a.stopThreadLocked(call.Await.ThreadID)
-	}
-	return nil
+	return a.DB.Tx(func(tx *repo.DB) error {
+		row, err := tx.ActiveTurn(threadID)
+		if repo.IsNotFound(err) || (err == nil && row.ID != turnID) {
+			return fmt.Errorf("agent: turn %s is not in progress", turnID)
+		}
+		if err != nil {
+			return err
+		}
+		row.Usage.Add(u)
+		return tx.UpdateTurn(row)
+	})
 }
 
-func (a *Agent) stopThreadLocked(threadID string) {
-	if sl, ok := a.slots[threadID]; ok {
-		a.stopLocked(threadID, sl)
-		return
+func (a *Agent) completeTurn(threadID string, turn repo.TurnRow) ([]repo.ItemRow, error) {
+	var closed []repo.ItemRow
+	err := a.DB.Tx(func(tx *repo.DB) error {
+		var err error
+		closed, err = completeIn(tx, threadID, turn)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agent: complete turn: %w", err)
 	}
-	view, ok := a.ReadThread(threadID)
-	if !ok {
-		return
+	return closed, nil
+}
+
+func (a *Agent) completeSubagentTurn(threadID string, turn repo.TurnRow, report repo.ItemRow) (closed []repo.ItemRow, stored repo.ItemRow, err error) {
+	err = a.DB.Tx(func(tx *repo.DB) error {
+		child, err := tx.Thread(threadID)
+		if err != nil {
+			return err
+		}
+		parentID := child.Thread.ParentThreadID
+		active, err := tx.ActiveTurn(parentID)
+		if repo.IsNotFound(err) || (err == nil && (active.ID != report.TurnID || report.ID != child.Thread.ParentItemID)) {
+			return fmt.Errorf("item %s is not the Agent call of thread %s's turn in progress", report.ID, parentID)
+		}
+		if err != nil {
+			return err
+		}
+		if closed, err = completeIn(tx, threadID, turn); err != nil {
+			return err
+		}
+		if err := saveItemIn(tx, parentID, report); err != nil {
+			return err
+		}
+		stored, err = tx.Item(report.ID)
+		return err
+	})
+	if err != nil {
+		return nil, repo.ItemRow{}, fmt.Errorf("agent: complete subagent turn: %w", err)
 	}
-	if turn, active := view.ActiveTurn(); active {
-		turn.Status = repo.TurnInterrupted
-		turn.Error = "stopped with the turn that launched it"
-		a.endLocked(turn)
+	return closed, stored, nil
+}
+
+func completeIn(tx *repo.DB, threadID string, turn repo.TurnRow) ([]repo.ItemRow, error) {
+	v, err := tx.Thread(threadID)
+	if err != nil {
+		return nil, err
 	}
+	active, ok := v.ActiveTurn()
+	if !ok || active.ID != turn.ID {
+		return nil, fmt.Errorf("turn %s is not in progress", turn.ID)
+	}
+	if turn.Status == repo.TurnInProgress {
+		return nil, fmt.Errorf("turn %s must end with a final status", turn.ID)
+	}
+	now := time.Now().UTC()
+	turn.ThreadID, turn.Seq, turn.CompletedAt = threadID, active.Seq, &now
+	if err := tx.UpdateTurn(turn); err != nil {
+		return nil, err
+	}
+	var closed []repo.ItemRow
+	for _, it := range v.Items {
+		if it.TurnID != turn.ID || it.Status != repo.ItemInProgress {
+			continue
+		}
+		it.Status = repo.ItemFailed
+		it.Error = fmt.Sprintf("the turn ended (%s) before this item finished", turn.Status)
+		it.CompletedAt = &now
+		if err := saveItemIn(tx, threadID, it); err != nil {
+			return nil, err
+		}
+		closed = append(closed, it)
+	}
+	t := v.Thread
+	t.UpdatedAt = now
+	return closed, tx.UpdateThread(t)
 }
 
 func checkMessage(text string) (string, error) {

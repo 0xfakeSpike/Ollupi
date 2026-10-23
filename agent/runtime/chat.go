@@ -36,20 +36,24 @@ func (rt *Runtime) respond(ctx context.Context, choice llm.ToolChoice) (llm.Chat
 		}
 	}
 	call := rt.modelCalls() + 1
-	st := newStreamedText(rt, prompt.Stats)
-	resp, err := rt.send(ctx, prompt, choice, st.delta)
-	st.usage = responseUsage(resp)
+	r := newResponseRecorder(rt, prompt.Stats)
+	resp, err := rt.send(ctx, prompt, choice, r.delta)
+	r.usage = responseUsage(resp)
 	if err == nil {
 		err = checkResponse(resp, choice)
 	}
 	if err != nil {
-		return llm.ChatResponse{}, st.fail(fmt.Errorf("runtime: model call %d: %w", call, err))
+		return llm.ChatResponse{}, r.fail(fmt.Errorf("runtime: model call %d: %w", call, err))
 	}
-	if err := st.complete(resp); err != nil {
+	if err := r.finish(resp); err != nil {
 		return llm.ChatResponse{}, err
 	}
-	for _, call := range resp.Message.ToolCalls {
-		if _, err := st.record(rt.callItem(st.responseID, call)); err != nil {
+	for i, call := range resp.Message.ToolCalls {
+		it := rt.callItem(r.id, call)
+		if r.agent == nil && r.reasoning == nil && i == 0 {
+			it.ContextStats, it.Usage = &r.stats, r.usage
+		}
+		if _, err := rt.record(it); err != nil {
 			return llm.ChatResponse{}, err
 		}
 	}

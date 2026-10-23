@@ -17,8 +17,9 @@ var builtinMethods = map[string]bool{
 	methodTurnStart: true, methodTurnSteer: true, methodTurnInterrupt: true,
 	methodModelList:     true,
 	methodWorkspaceList: true, methodWorkspaceAdd: true, methodWorkspaceRename: true, methodWorkspaceArchive: true,
-	methodToolCall:   true,
-	methodMemoryList: true, methodMemoryStatus: true, methodMemoryUpdate: true, methodMemoryForget: true,
+	methodWorkspacePermissions: true,
+	methodToolCall:             true,
+	methodMemoryList:           true, methodMemoryStatus: true, methodMemoryUpdate: true, methodMemoryForget: true,
 }
 
 func (s *Server) Register(name string, m Method) error {

@@ -8,12 +8,14 @@ import (
 )
 
 type WorkspaceRow struct {
-	ID         string     `gorm:"primaryKey" json:"id"`
-	Name       string     `gorm:"not null;check:workspaces_name,length(trim(name)) > 0" json:"name"`
-	RootPath   string     `gorm:"not null;uniqueIndex" json:"rootPath"`
-	CreatedAt  time.Time  `gorm:"not null;autoCreateTime:false" json:"createdAt"`
-	UpdatedAt  time.Time  `gorm:"not null;autoUpdateTime:false;index:workspaces_archived_updated,priority:2,sort:desc" json:"updatedAt"`
-	ArchivedAt *time.Time `gorm:"index:workspaces_archived_updated,priority:1" json:"archivedAt,omitempty"`
+	ID             string          `gorm:"primaryKey" json:"id"`
+	Name           string          `gorm:"not null;check:workspaces_name,length(trim(name)) > 0" json:"name"`
+	RootPath       string          `gorm:"not null;uniqueIndex" json:"rootPath"`
+	ApprovalPolicy string          `gorm:"not null;default:''" json:"approvalPolicy,omitempty"`
+	Permissions    PermissionRules `gorm:"not null;default:'{}';serializer:json;check:workspaces_permissions,json_valid(permissions)" json:"permissions,omitempty"`
+	CreatedAt      time.Time       `gorm:"not null;autoCreateTime:false" json:"createdAt"`
+	UpdatedAt      time.Time       `gorm:"not null;autoUpdateTime:false;index:workspaces_archived_updated,priority:2,sort:desc" json:"updatedAt"`
+	ArchivedAt     *time.Time      `gorm:"index:workspaces_archived_updated,priority:1" json:"archivedAt,omitempty"`
 }
 
 func (WorkspaceRow) TableName() string { return "workspaces" }
@@ -28,7 +30,7 @@ func (d *DB) saveWorkspace(w WorkspaceRow) error {
 	w.CreatedAt, w.UpdatedAt, w.ArchivedAt = w.CreatedAt.UTC(), w.UpdatedAt.UTC(), nullTime(w.ArchivedAt)
 	res := d.gorm.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "updated_at", "archived_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"name", "approval_policy", "permissions", "updated_at", "archived_at"}),
 		Where:     where("workspaces.root_path = excluded.root_path AND workspaces.created_at = excluded.created_at"),
 	}).Create(&w)
 	if err := checkOne(res); err != nil {

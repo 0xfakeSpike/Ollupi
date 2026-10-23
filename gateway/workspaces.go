@@ -33,13 +33,18 @@ func (c *conn) workspaceRequest(method string, params json.RawMessage) (any, fun
 	switch method {
 	case methodWorkspaceAdd:
 		var p struct {
-			Path string `json:"path"`
-			Name string `json:"name,omitempty"`
+			Path           string               `json:"path"`
+			Name           string               `json:"name,omitempty"`
+			ApprovalPolicy string               `json:"approvalPolicy,omitempty"`
+			Permissions    repo.PermissionRules `json:"permissions"`
 		}
 		if err := jsonrpc.DecodeParams(params, &p); err != nil {
 			return nil, nil, err
 		}
-		result, err = addWorkspace(manager.DB, p.Path, p.Name)
+		if err := manager.ValidateWorkspaceSettings(p.ApprovalPolicy, p.Permissions); err != nil {
+			return nil, nil, serverError(fmt.Errorf("gateway: %w", err))
+		}
+		result, err = addWorkspace(manager.DB, p.Path, p.Name, p.ApprovalPolicy, p.Permissions)
 	case methodWorkspaceRename:
 		var p struct {
 			WorkspaceID string `json:"workspaceId"`
@@ -61,6 +66,22 @@ func (c *conn) workspaceRequest(method string, params json.RawMessage) (any, fun
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "archived is required")
 		}
 		result, err = archiveWorkspace(manager.DB, p.WorkspaceID, *p.Archived)
+	case methodWorkspacePermissions:
+		var p struct {
+			WorkspaceID    string               `json:"workspaceId"`
+			ApprovalPolicy string               `json:"approvalPolicy,omitempty"`
+			Permissions    repo.PermissionRules `json:"permissions"`
+		}
+		if err := jsonrpc.DecodeParams(params, &p); err != nil {
+			return nil, nil, err
+		}
+		if strings.TrimSpace(p.WorkspaceID) == "" {
+			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "workspaceId is required")
+		}
+		if err := manager.ValidateWorkspaceSettings(p.ApprovalPolicy, p.Permissions); err != nil {
+			return nil, nil, serverError(fmt.Errorf("gateway: %w", err))
+		}
+		result, err = setWorkspacePermissions(manager.DB, p.WorkspaceID, p.ApprovalPolicy, p.Permissions)
 	}
 	if err != nil {
 		return nil, nil, serverError(err)
@@ -71,7 +92,7 @@ func (c *conn) workspaceRequest(method string, params json.RawMessage) (any, fun
 	return payload, func() { c.s.broadcast("workspace/changed", payload) }, nil
 }
 
-func addWorkspace(db *repo.DB, path, name string) (repo.WorkspaceRow, error) {
+func addWorkspace(db *repo.DB, path, name, approvalPolicy string, permissions repo.PermissionRules) (repo.WorkspaceRow, error) {
 	root, err := sandbox.CanonicalDirectory(path)
 	if err != nil {
 		return repo.WorkspaceRow{}, err
@@ -83,7 +104,7 @@ func addWorkspace(db *repo.DB, path, name string) (repo.WorkspaceRow, error) {
 		return repo.WorkspaceRow{}, err
 	}
 	now := time.Now().UTC()
-	w := repo.WorkspaceRow{ID: uuid.NewString(), Name: name, RootPath: root, CreatedAt: now, UpdatedAt: now}
+	w := repo.WorkspaceRow{ID: uuid.NewString(), Name: name, RootPath: root, ApprovalPolicy: approvalPolicy, Permissions: permissions, CreatedAt: now, UpdatedAt: now}
 	return db.AddWorkspace(w,
 		func(existing repo.WorkspaceRow) bool { return sameDirectory(existing.RootPath, root) },
 		func(existing repo.WorkspaceRow) (repo.WorkspaceRow, bool) {
@@ -93,6 +114,13 @@ func addWorkspace(db *repo.DB, path, name string) (repo.WorkspaceRow, error) {
 			existing.ArchivedAt, existing.UpdatedAt = nil, now
 			return existing, true
 		})
+}
+
+func setWorkspacePermissions(db *repo.DB, id, approvalPolicy string, permissions repo.PermissionRules) (repo.WorkspaceRow, error) {
+	return changeWorkspace(db, id, func(w *repo.WorkspaceRow) {
+		w.ApprovalPolicy = approvalPolicy
+		w.Permissions = permissions
+	})
 }
 
 func renameWorkspace(db *repo.DB, id, name string) (repo.WorkspaceRow, error) {

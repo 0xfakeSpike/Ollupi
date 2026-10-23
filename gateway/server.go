@@ -152,7 +152,7 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 	switch method {
 	case methodMemoryList, methodMemoryStatus, methodMemoryUpdate, methodMemoryForget:
 		return c.memoryRequest(method, params)
-	case methodWorkspaceList, methodWorkspaceAdd, methodWorkspaceRename, methodWorkspaceArchive:
+	case methodWorkspaceList, methodWorkspaceAdd, methodWorkspaceRename, methodWorkspaceArchive, methodWorkspacePermissions:
 		return c.workspaceRequest(method, params)
 	case methodModelList:
 		if err := jsonrpc.DecodeParams(params, &struct{}{}); err != nil {
@@ -177,8 +177,8 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 		if err := jsonrpc.DecodeParams(params, &p); err != nil {
 			return nil, nil, err
 		}
-		view, ok := ag.ReadThread(p.ThreadID)
-		if !ok {
+		view, err := ag.ReadThread(p.ThreadID)
+		if err != nil {
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "thread %q not found", p.ThreadID)
 		}
 		if method == methodThreadRead {
@@ -219,7 +219,7 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 		if rpcErr != nil {
 			return nil, nil, rpcErr
 		}
-		if _, ok := ag.ReadThread(p.ThreadID); !ok {
+		if _, err := ag.ReadThread(p.ThreadID); err != nil {
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "thread %q not found", p.ThreadID)
 		}
 
@@ -242,7 +242,7 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 		if rpcErr != nil {
 			return nil, nil, rpcErr
 		}
-		if _, ok := ag.ReadThread(p.ThreadID); !ok {
+		if _, err := ag.ReadThread(p.ThreadID); err != nil {
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "thread %q not found", p.ThreadID)
 		}
 		turn, err := ag.SteerTurn(p.ThreadID, p.ExpectedTurnID, text)
@@ -260,8 +260,8 @@ func (c *conn) Call(method string, params json.RawMessage) (any, func(), *jsonrp
 		if err := jsonrpc.DecodeParams(params, &p); err != nil {
 			return nil, nil, err
 		}
-		view, ok := ag.ReadThread(p.ThreadID)
-		if !ok {
+		view, err := ag.ReadThread(p.ThreadID)
+		if err != nil {
 			return nil, nil, jsonrpc.Errorf(jsonrpc.CodeInvalidParams, "thread %q not found", p.ThreadID)
 		}
 		if turn, active := view.ActiveTurn(); !active || turn.ID != p.TurnID {

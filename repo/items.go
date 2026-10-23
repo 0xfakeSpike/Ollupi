@@ -81,7 +81,6 @@ type ContextStats struct {
 
 type MemoryReference struct {
 	ID          string `json:"id"`
-	Revision    int    `json:"revision"`
 	WorkspaceID string `json:"workspaceId,omitempty"`
 	Topic       string `json:"topic,omitempty"`
 	Text        string `json:"text"`
@@ -208,10 +207,4 @@ func (d *DB) EndedItem(id string) (ItemRow, error) {
 	err := d.gorm.Table("items AS i").Select("i.*").Joins("JOIN turns t ON t.id = i.turn_id").
 		Where("i.id = ? AND t.status <> 'inProgress' AND i.type NOT IN ('reasoning', 'contextCompaction', 'memoryContext')", id).Take(&row).Error
 	return row, notFound(err)
-}
-
-func (d *DB) UserMessageIDs(turnID string, limit int) ([]string, error) {
-	var ids []string
-	err := d.gorm.Model(&ItemRow{}).Where("turn_id = ? AND type = 'userMessage'", turnID).Order("seq").Limit(limit).Pluck("id", &ids).Error
-	return ids, err
 }

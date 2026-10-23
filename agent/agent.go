@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	workers       = 4
 	maxInputRunes = 4000
 )
 
@@ -50,22 +49,12 @@ type Agent struct {
 	DB          *repo.DB
 	OnEvent     func(Event)
 
-	ctx        context.Context
-	registry   *tools.Registry
-	skills     *skills.Catalog
-	cron       *cron.Jobs
-	recovering bool
-	slots      map[string]*slot
-	queue      []string
-	busy       int
-	mu         sync.Mutex
-	background sync.WaitGroup
-	loops      sync.WaitGroup
-}
-
-type slot struct {
-	cancel  context.CancelFunc
-	steered bool
+	ctx      context.Context
+	registry *tools.Registry
+	skills   *skills.Catalog
+	cron     *cron.Jobs
+	run      *scheduler
+	loops    sync.WaitGroup
 }
 
 func (a *Agent) Start(ctx context.Context) error {
@@ -76,7 +65,6 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent: a database is required")
 	}
 	a.ctx = ctx
-	a.slots = map[string]*slot{}
 	if err := a.buildTools(ctx); err != nil {
 		return err
 	}
@@ -86,16 +74,11 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err := a.checkBudgets(); err != nil {
 		return fmt.Errorf("agent %s: %w", a.Name, err)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.recovering = true
-	if err := a.recoverLocked(); err != nil {
+	a.run = newScheduler(a, ctx)
+	if err := a.run.recover(); err != nil {
 		return err
 	}
-	a.recovering = false
-	a.dispatchLocked()
-	a.loops.Add(1)
-	go a.keepTime()
+	a.run.start()
 	if a.Memory != nil {
 		a.loops.Add(1)
 		go func() {
@@ -128,7 +111,7 @@ func (a *Agent) buildTools(ctx context.Context) error {
 }
 
 func (a *Agent) Wait() {
-	a.background.Wait()
+	a.run.wait()
 	if a.ctx.Err() != nil {
 		a.loops.Wait()
 	}
@@ -157,41 +140,5 @@ func (a *Agent) callerOf(t repo.ThreadRow) tools.Caller {
 	return c
 }
 
-func (a *Agent) threadPolicy(t repo.ThreadRow) permission.Policy {
-	if t.ApprovalPolicy != "" {
-		return permission.Policy(t.ApprovalPolicy)
-	}
-	return a.ApprovalPolicy
-}
-
-func (a *Agent) rulesFor(t repo.ThreadRow) permission.Rules {
-	if t.ParentThreadID == "" {
-		return a.Permissions
-	}
-	rules := a.Permissions
-	rules.Deny = append(slices.Clone(rules.Deny), subagent.Tool)
-	return rules
-}
-
-func (a *Agent) toolsFor(names []string, policy permission.Policy, rules permission.Rules) ([]tools.ToolDescriptor, *permission.Checker, error) {
-	checker, err := permission.New(policy, rules, a.registry)
-	if err != nil {
-		return nil, nil, err
-	}
-	catalog := a.registry.Descriptors()
-	descriptors := catalog
-	if names != nil {
-		for i, name := range names {
-			if slices.Contains(names[:i], name) {
-				return nil, nil, fmt.Errorf("tool %q is listed twice", name)
-			}
-			if !slices.ContainsFunc(catalog, func(t tools.ToolDescriptor) bool { return t.Name == name }) {
-				return nil, nil, fmt.Errorf("tool %q is not in the tool registry", name)
-			}
-		}
-		descriptors = slices.DeleteFunc(slices.Clone(catalog), func(t tools.ToolDescriptor) bool {
-			return !slices.Contains(names, t.Name)
-		})
-	}
-	return slices.DeleteFunc(slices.Clone(descriptors), func(t tools.ToolDescriptor) bool { return !checker.Offers(t.Name) }), checker, nil
-}
+// policyFor resolves the approval policy of a thread: thread override, then
+// workspace setting, then the agent default.

@@ -4,12 +4,22 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/0xfakeSpike/ollupi/repo"
 )
 
 type Rules struct {
 	Allow []string
 	Ask   []string
 	Deny  []string
+}
+
+func RulesFrom(r repo.PermissionRules) Rules {
+	return Rules{Allow: r.Allow, Ask: r.Ask, Deny: r.Deny}
+}
+
+func (r Rules) ToRepo() repo.PermissionRules {
+	return repo.PermissionRules{Allow: r.Allow, Ask: r.Ask, Deny: r.Deny}
 }
 
 type ruleVerdict int

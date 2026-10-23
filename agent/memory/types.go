@@ -2,12 +2,9 @@ package memory
 
 import (
 	"encoding/json"
-	"errors"
 
 	"github.com/0xfakeSpike/ollupi/repo"
 )
-
-var ErrConflict = errors.New("memory changed while processing; retry")
 
 type Fact struct {
 	Source repo.MemorySource `json:"source"`
@@ -15,18 +12,24 @@ type Fact struct {
 }
 
 type Batch struct {
-	WorkspaceID string                 `json:"workspaceId"`
-	Changes     []repo.MemoryChangeRow `json:"-"`
-	Facts       []Fact                 `json:"facts"`
-	Existing    []repo.MemoryRow       `json:"existing"`
+	WorkspaceID string                `json:"workspaceId"`
+	Events      []repo.MemoryEventRow `json:"-"`
+	Facts       []Fact                `json:"facts"`
+	Existing    []repo.MemoryRow      `json:"existing"`
 }
 
 type Operation struct {
-	Action   string              `json:"action"`
-	ID       string              `json:"id,omitempty"`
-	Revision int                 `json:"revision,omitempty"`
-	Topic    string              `json:"topic,omitempty"`
-	Kind     string              `json:"kind,omitempty"`
-	Text     string              `json:"text,omitempty"`
-	Sources  []repo.MemorySource `json:"sources"`
+	Action  string              `json:"action"`
+	ID      string              `json:"id,omitempty"`
+	Topic   string              `json:"topic,omitempty"`
+	Kind    string              `json:"kind,omitempty"`
+	Text    string              `json:"text,omitempty"`
+	Sources []repo.MemorySource `json:"sources"`
+}
+
+// Context is the memory snapshot a turn receives. It is transport-agnostic;
+// the runtime turns it into a memoryContext item.
+type Context struct {
+	Entries []repo.MemoryReference
+	Text    string
 }
